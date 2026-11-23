@@ -184,6 +184,8 @@ jobs:
           echo "$out"
           case "$out" in "ClamAV "*"(ClamCove $REV)") ;; *) exit 1 ;; esac
           docker run --rm "ghcr.io/${GITHUB_REPOSITORY_OWNER}/clamcove:$REV" sh -c 'test -z "$(find / -xdev -name "libclamunrar.so*")" && test -n "$(find / -xdev -name "libclamunrar_iface.so*")"'
+          docker run --rm "ghcr.io/${GITHUB_REPOSITORY_OWNER}/clamcove:$REV" clamconf | grep -x 'Checking configuration files in /etc/clamav' > /dev/null
+          docker run --rm "ghcr.io/${GITHUB_REPOSITORY_OWNER}/clamcove:$REV" test -f /etc/clamav/certs/clamav.crt
 
       - name: Push
         run: |
