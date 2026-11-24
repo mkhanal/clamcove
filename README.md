@@ -16,10 +16,29 @@ open source antivirus engine. It enhances ClamAV for two reasons:
 
 ClamCove is versioned on ClamAV's version:
 `<clamav major>.<minor>.<patch>.<clamcove release>`, the OpenResty convention,
-so ClamCove 1.5.4.4 is ClamAV 1.5.4 plus ClamCove release 4. Container images
-are tagged with the exact version (`ghcr.io/mkhanal/clamcove:1.5.4.4`) and with
-the floating tags `1.5.4`, `1.5`, `1` and `latest`, each moved to the newest
-ClamCove release on that line.
+so ClamCove 1.5.4.4 is ClamAV 1.5.4 plus ClamCove release 4.
+
+Each release publishes three container images, for linux/amd64 and linux/arm64,
+built from the release tarball, with their digests in the release notes. The
+drop-in and runtime images are built on `debian:trixie-slim`; the updater image
+carries only what `freshclam` loads, copied from it with the Debian package
+records and copyright files. All read their configuration from `/etc/clamav`
+and their signatures from `/var/lib/clamav`.
+
+| Image | Contents | Tags |
+| --- | --- | --- |
+| Drop-in | Everything a ClamAV build installs: every program, library, header and document | `ghcr.io/mkhanal/clamcove:1.5.4.4`, and `1.5.4`, `1.5`, `1`, `latest` |
+| Runtime | Only `clamd` and `clamdscan`, the libraries they load (without debug symbols) and the CVD certificates, for running `clamd` as a service with signatures kept current from outside it; user and group `clamav` are 1000:1000 | `ghcr.io/mkhanal/clamcove:1.5.4.4-runtime`, and `1.5.4-runtime`, `1.5-runtime`, `1-runtime`, `runtime` |
+| Updater | Only `freshclam`, the libraries it loads and the certificates it verifies with, on an empty base: no shell or other program. Runs `freshclam --daemon` by default; any other arguments, such as `--stdout`, run one update and exit. User and group `clamav` are 1000:1000, so it shares a signature folder with the runtime image | `ghcr.io/mkhanal/clamcove-updater:1.5.4.4`, and `1.5.4`, `1.5`, `1`, `latest` |
+
+Each floating tag moves to the newest ClamCove release on its line.
+
+Every image carries `/usr/share/doc/clamcove/SOURCES`, naming its complete
+corresponding source: the release tarball, and
+`clamcove-<version>-debian-sources.tar`, a separate asset of the same release
+holding the Debian source package of every Debian package in the images, at
+the exact version each carries (listed in its `SOURCES.txt`). Running ClamCove
+needs neither; download them when you need that source.
 
 ClamCove is a drop-in replacement for ClamAV: the same commands, configuration
 files, libraries, install paths and signature database. Its aim is to get every
