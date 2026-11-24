@@ -715,13 +715,15 @@ int main(int argc, char **argv)
             logg(LOGG_INFO_NF, "FIPS crypto hash limits enabled.\n");
         }
 
-        if ((ret = cl_load(dbdir, engine, &sigs, dboptions))) {
+        /* Record the database directory state before loading, as reload_db() does,
+         * so a database written while loading is seen as changed by SelfCheck. */
+        if ((ret = statinidir(dbdir))) {
             logg(LOGG_ERROR, "%s\n", cl_strerror(ret));
             ret = 1;
             break;
         }
 
-        if ((ret = statinidir(dbdir))) {
+        if ((ret = cl_load(dbdir, engine, &sigs, dboptions))) {
             logg(LOGG_ERROR, "%s\n", cl_strerror(ret));
             ret = 1;
             break;

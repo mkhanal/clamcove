@@ -15,6 +15,8 @@ import sys
 import time
 import unittest
 import hashlib
+import errno
+import threading
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import testcase
@@ -386,6 +388,95 @@ class TC(testcase.TestCase):
 
         self.run_clamdscan('{}'.format(TC.path_tmp / 'reload-testfile'),
             expected_ec=1, expected_out=['ClamAV-RELOAD-TestFile.UNOFFICIAL FOUND', 'Infected files: 1'])
+
+    def test_clamd_03_selfcheck_database_added_during_initial_load(self):
+        '''
+        A database written while clamd performs its initial load must be loaded
+        by the next SelfCheck.
+        A FIFO named like a database blocks the initial load until the test has
+        written the new database and then lets it finish.
+        '''
+        if operating_system == 'windows':
+            self.skipTest('FIFOs are not available on Windows')
+
+        self.step_name('Test a database added during the initial load is loaded by SelfCheck')
+
+        path_db = TC.path_tmp / 'database-initial-load'
+        path_db.mkdir()
+        shutil.copy(str(TC.path_db / 'clamav.hdb'), str(path_db))
+        fifo = path_db / 'block.ndb'
+        os.mkfifo(str(fifo))
+
+        config = TC.clamd_config.read_text().replace(str(TC.path_db), str(path_db))
+        config += '''
+            SelfCheck 1
+            '''
+        config_path = TC.path_tmp / 'clamd-initial-load.conf'
+        config_path.write_text(config)
+
+        # One signature per line: the loader opens the FIFO several times and a
+        # reader still draining the previous write can be served again before it
+        # closes, so it must see whole lines, not a signature run into itself.
+        fifo_content = b'Block-Initial-Load:0:0:' + b'426c6f636b2d496e697469616c2d4c6f6164' + b'\n'
+        stop = threading.Event()
+
+        def serve_fifo(announce):
+            # Opening a FIFO for writing without blocking fails with ENXIO
+            # until a reader has it open, which is clamd loading it.
+            while not stop.is_set():
+                try:
+                    fd = os.open(str(fifo), os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as exc:
+                    if exc.errno != errno.ENXIO:
+                        raise
+                    stop.wait(0.05)
+                    continue
+                if announce is not None:
+                    announce()
+                    announce = None
+                    gate.wait()
+                os.set_blocking(fd, True)
+                try:
+                    with os.fdopen(fd, 'wb') as f:
+                        f.write(fifo_content)
+                except BrokenPipeError:
+                    pass
+
+        opened = threading.Event()
+        gate = threading.Event()
+        server = threading.Thread(target=serve_fifo, args=(opened.set,), daemon=True)
+
+        def stop_server():
+            stop.set()
+            gate.set()
+            server.join(timeout=30)
+
+        self.addCleanup(stop_server)
+
+        self.start_clamd(clamd_config=config_path)
+        server.start()
+
+        assert opened.wait(timeout=60), 'clamd did not open the FIFO, so its initial load never started'
+        poll = self.proc.poll()
+        assert poll == None  # subprocess is alive and still loading
+
+        (path_db / 'added-during-load.ndb').write_text('ClamAV-ADDED-DURING-LOAD:0:0:' + b'ClamAV-INITIAL-LOAD-Test'.hex())
+        gate.set()
+
+        testfile = TC.path_tmp / 'initial-load-testfile'
+        testfile.write_bytes(b'ClamAV-INITIAL-LOAD-Test')
+
+        deadline = time.monotonic() + 120
+        detected = False
+        while time.monotonic() < deadline:
+            output = self.execute_command('{clamdscan} --ping 5 --wait -c {clamd_config} {testfile}'.format(
+                clamdscan=TC.clamdscan, clamd_config=config_path, testfile=testfile))
+            if output.ec == 1 and 'ClamAV-ADDED-DURING-LOAD.UNOFFICIAL FOUND' in output.out:
+                detected = True
+                break
+            time.sleep(1)
+
+        assert detected, 'SelfCheck did not load the database added during the initial load'
 
     def test_clamd_04_all_testfiles(self):
         '''
