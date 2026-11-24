@@ -124,7 +124,7 @@ One line each; the detail is in the linked issues and pull requests.
 | Names of packages and documents | `clamav` | CPack, `.deb` and `.rpm` packages are `clamcove` (providing, conflicting with and replacing `clamav`); man page headers and Windows file resources say ClamCove; library sonames and install paths are unchanged | [#12](https://github.com/mkhanal/clamcove/issues/12) |
 | freshclam | `User-Agent: ClamAV/1.5.4 (OS: ...)`, official signature databases | Same | |
 | Configuration and signatures | `clamd.conf`, `freshclam.conf`, official databases | Same files and databases; two options added (`AlertIncompleteRAR`, `--alert-incomplete-rar`) | |
-| Release artefacts | Cisco's tarball, packages and images | The source tarball, the net patches against ClamAV 1.5.4, and a linux/amd64 image `ghcr.io/mkhanal/clamcove`; no other binaries | [README](../README.md#release-patches) |
+| Release artefacts | Cisco's tarball, packages and images | The source tarball, the net patches against ClamAV 1.5.4, and three images for linux/amd64 and linux/arm64, `ghcr.io/mkhanal/clamcove:<version>` (everything a build installs), `ghcr.io/mkhanal/clamcove:<version>-runtime` (`clamd` and `clamdscan` only) and `ghcr.io/mkhanal/clamcove-updater:<version>` (`freshclam` only), with the Debian source of their packages as a separate release asset; no other binaries | [README](../README.md#release-patches), [#62](https://github.com/mkhanal/clamcove/issues/62), [#67](https://github.com/mkhanal/clamcove/issues/67) |
 | Platforms built and tested in CI | Not compared | Linux x86-64 and arm64, macOS arm64, Windows x64; 32-bit is not built | `.github/workflows/cmake.yml` |
 
 ## Limits and risks
