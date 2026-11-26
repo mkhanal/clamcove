@@ -1028,38 +1028,192 @@ static cl_error_t yara_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_a
 }
 #endif
 
-cl_error_t cli_exp_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info)
+void cli_lsig_eval_mode_init(struct cl_engine *engine)
+{
+    const char *value = getenv("CL_LSIG_EVAL");
+    const char *name  = "sparse";
+
+    engine->lsig_eval_mode = CLI_LSIG_EVAL_SPARSE;
+
+    if (NULL == value || '\0' == value[0] || 0 == strcmp(value, "sparse")) {
+        // Sparse is the default.
+    } else if (0 == strcmp(value, "full")) {
+        engine->lsig_eval_mode = CLI_LSIG_EVAL_FULL;
+        name                   = "full";
+    } else if (0 == strcmp(value, "verify")) {
+        engine->lsig_eval_mode = CLI_LSIG_EVAL_VERIFY;
+        name                   = "verify";
+    } else {
+        cli_warnmsg("CL_LSIG_EVAL=\"%s\" is not sparse, full or verify; using sparse\n", value);
+    }
+
+    cli_dbgmsg("Logical signature evaluation mode: %s\n", name);
+}
+
+static cl_error_t lsig_or_yara_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info, uint32_t lsid)
+{
+    cl_error_t status = CL_SUCCESS;
+
+    if (root->ac_lsigtable[lsid]->type == CLI_LSIG_NORMAL) {
+        status = lsig_eval(ctx, root, acdata, target_info, lsid);
+    }
+#ifdef HAVE_YARA
+    else if (root->ac_lsigtable[lsid]->type == CLI_YARA_NORMAL || root->ac_lsigtable[lsid]->type == CLI_YARA_OFFSET) {
+        status = yara_eval(ctx, root, acdata, target_info, lsid);
+    }
+#endif
+
+    return status;
+}
+
+/*
+ * Check the time limit every n'th lsig.
+ * In testing with a large signature set, we found n = 10 to be just as fast as 100 or
+ * 1000 and has a significant performance improvement over checking with every lsig.
+ */
+#define LSIG_TIMELIMIT_INTERVAL 10
+
+static cl_error_t lsig_checktimelimit(cli_ctx *ctx)
+{
+    cl_error_t status = cli_checktimelimit(ctx);
+
+    if (CL_SUCCESS != status) {
+        cli_dbgmsg("Exceeded scan time limit while evaluating logical and yara signatures (max: %u)\n", ctx->engine->maxscantime);
+    }
+
+    return status;
+}
+
+static int cmp_lsig_id(const void *a, const void *b)
+{
+    const uint32_t x = *(const uint32_t *)a;
+    const uint32_t y = *(const uint32_t *)b;
+
+    return (x > y) - (x < y);
+}
+
+/*
+ * Report each logical signature that sparse evaluation would skip although a
+ * subsignature count is not zero.
+ */
+static bool lsig_skipped_counts_are_zero(const struct cli_matcher *root, const struct cli_ac_data *acdata)
+{
+    bool all_zero = true;
+    uint32_t always_idx = 0;
+    uint32_t i, j;
+
+    for (i = 0; i < root->ac_lsigs; i++) {
+        while (always_idx < root->ac_lsig_always_cnt && root->ac_lsig_always[always_idx] < i) {
+            always_idx++;
+        }
+        if ((always_idx < root->ac_lsig_always_cnt && root->ac_lsig_always[always_idx] == i) || acdata->lsig_touched[i]) {
+            continue;
+        }
+        for (j = 0; j < 64; j++) {
+            if (acdata->lsigcnt[i][j] != 0) {
+                cli_errmsg("Sparse logical signature evaluation would skip %s although subsignature %u has matched %u time(s)\n",
+                           root->ac_lsigtable[i]->virname, j, acdata->lsigcnt[i][j]);
+                all_zero = false;
+                break;
+            }
+        }
+    }
+
+    return all_zero;
+}
+
+static cl_error_t lsig_eval_all(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info)
 {
     uint32_t i;
     cl_error_t status = CL_SUCCESS;
 
     for (i = 0; i < root->ac_lsigs; i++) {
-        if (root->ac_lsigtable[i]->type == CLI_LSIG_NORMAL) {
-            status = lsig_eval(ctx, root, acdata, target_info, i);
-        }
-#ifdef HAVE_YARA
-        else if (root->ac_lsigtable[i]->type == CLI_YARA_NORMAL || root->ac_lsigtable[i]->type == CLI_YARA_OFFSET) {
-            status = yara_eval(ctx, root, acdata, target_info, i);
-        }
-#endif
-
+        status = lsig_or_yara_eval(ctx, root, acdata, target_info, i);
         if (CL_SUCCESS != status) {
             break;
         }
 
-        if (i % 10 == 0) {
-            // Check the time limit every n'th lsig.
-            // In testing with a large signature set, we found n = 10 to be just as fast as 100 or
-            // 1000 and has a significant performance improvement over checking with every lsig.
-            status = cli_checktimelimit(ctx);
+        if (i % LSIG_TIMELIMIT_INTERVAL == 0) {
+            status = lsig_checktimelimit(ctx);
             if (CL_SUCCESS != status) {
-                cli_dbgmsg("Exceeded scan time limit while evaluating logical and yara signatures (max: %u)\n", ctx->engine->maxscantime);
                 break;
             }
         }
     }
 
     return status;
+}
+
+/*
+ * Evaluate, in ascending order, the logical signatures a subsignature has
+ * matched together with the ones that can hold with no subsignature matched.
+ * Every other logical signature has all of its counts at zero and its logic
+ * false, so evaluating it cannot alert.
+ */
+static cl_error_t lsig_eval_sparse(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info)
+{
+    uint32_t always_idx = 0;
+    uint32_t touched_idx = 0;
+    uint32_t evaluated = 0;
+    uint32_t prev_id = UINT32_MAX;
+    cl_error_t status;
+
+    status = lsig_checktimelimit(ctx);
+    if (CL_SUCCESS != status) {
+        return status;
+    }
+
+    if (acdata->lsig_touched_cnt > 1) {
+        qsort(acdata->lsig_touched_list, acdata->lsig_touched_cnt, sizeof(uint32_t), cmp_lsig_id);
+    }
+
+    while (always_idx < root->ac_lsig_always_cnt || touched_idx < acdata->lsig_touched_cnt) {
+        uint32_t id;
+
+        if (touched_idx >= acdata->lsig_touched_cnt ||
+            (always_idx < root->ac_lsig_always_cnt && root->ac_lsig_always[always_idx] <= acdata->lsig_touched_list[touched_idx])) {
+            id = root->ac_lsig_always[always_idx++];
+        } else {
+            id = acdata->lsig_touched_list[touched_idx++];
+        }
+
+        if (id == prev_id) {
+            continue;
+        }
+        prev_id = id;
+
+        status = lsig_or_yara_eval(ctx, root, acdata, target_info, id);
+        if (CL_SUCCESS != status) {
+            break;
+        }
+
+        if (++evaluated % LSIG_TIMELIMIT_INTERVAL == 0) {
+            status = lsig_checktimelimit(ctx);
+            if (CL_SUCCESS != status) {
+                break;
+            }
+        }
+    }
+
+    return status;
+}
+
+cl_error_t cli_exp_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info)
+{
+    switch (ctx->engine->lsig_eval_mode) {
+        case CLI_LSIG_EVAL_FULL:
+            return lsig_eval_all(ctx, root, acdata, target_info);
+
+        case CLI_LSIG_EVAL_VERIFY:
+            if (!lsig_skipped_counts_are_zero(root, acdata)) {
+                return lsig_eval_all(ctx, root, acdata, target_info);
+            }
+            return lsig_eval_sparse(ctx, root, acdata, target_info);
+
+        case CLI_LSIG_EVAL_SPARSE:
+        default:
+            return lsig_eval_sparse(ctx, root, acdata, target_info);
+    }
 }
 
 cl_error_t cli_scan_fmap(cli_ctx *ctx, cli_file_t ftype, bool filetype_only, struct cli_matched_type **ftoffset, unsigned int acmode, struct cli_ac_result **acres)

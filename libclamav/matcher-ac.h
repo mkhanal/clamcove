@@ -68,6 +68,10 @@ typedef struct cli_ac_data {
     /** Hashset for versioninfo matching */
     const struct cli_hashset *vinfo;
     uint32_t min_partno;
+    /** Logical signatures whose subsignature counts changed during the scan */
+    uint8_t *lsig_touched;
+    uint32_t *lsig_touched_list;
+    uint32_t lsig_touched_cnt;
 } cli_ac_data;
 
 struct cli_alt_node {
@@ -165,6 +169,15 @@ cl_error_t cli_ac_initdata(struct cli_ac_data *data, uint32_t partsigs, uint32_t
 cl_error_t lsig_sub_matched(const struct cli_matcher *root, struct cli_ac_data *mdata, uint32_t lsig_id, uint32_t subsig_id, uint32_t realoff, int partial);
 
 cl_error_t cli_ac_chkmacro(struct cli_matcher *root, struct cli_ac_data *data, unsigned lsigid1);
+
+/**
+ * @brief Record that a subsignature count of a logical signature changed.
+ *
+ * Anything that changes a count in `mdata->lsigcnt` must call this, because
+ * cli_exp_eval() evaluates only the logical signatures recorded here and the
+ * ones whose logic can hold with every count at zero.
+ */
+void lsig_touch(struct cli_ac_data *mdata, uint32_t lsig_id);
 int cli_ac_chklsig(const char *expr, const char *end, uint32_t *lsigcnt, unsigned int *cnt, uint64_t *ids, unsigned int parse_only);
 void cli_ac_freedata(struct cli_ac_data *data);
 cl_error_t cli_ac_scanbuff(const unsigned char *buffer, uint32_t length, const char **virname, void **customdata, struct cli_ac_result **res, const struct cli_matcher *root, struct cli_ac_data *mdata, uint32_t offset, cli_file_t ftype, struct cli_matched_type **ftoffset, unsigned int mode, cli_ctx *ctx);

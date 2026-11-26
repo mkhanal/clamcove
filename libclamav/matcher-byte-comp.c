@@ -524,6 +524,7 @@ cl_error_t cli_bcomp_scanbuf(const unsigned char *buffer, size_t buffer_length, 
             /* check to see if we are being run in sigtool or not */
             if (bcomp->lsigid[0]) {
                 mdata->lsigcnt[bcomp->lsigid[1]][bcomp->lsigid[2]]++;
+                lsig_touch(mdata, bcomp->lsigid[1]);
             } else {
                 /* Run by sigtool's --test-sigs feature without context of whole lsig or previous subsigs */
                 ret = cli_append_virus(ctx, "test");

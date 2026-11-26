@@ -5980,6 +5980,8 @@ cl_error_t cl_engine_compile(struct cl_engine *engine)
                       //       but would be painful to implement. For now, just
                       //       having it all as one task should be good enough.
 
+    cli_lsig_eval_mode_init(engine);
+
     /*
      * Ok, now actually compile everything.
      */

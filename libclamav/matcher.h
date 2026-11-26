@@ -182,6 +182,12 @@ struct cli_matcher {
 #else
     void *_padding_mempool;
 #endif
+
+    /* Logical signatures evaluated for every file, ascending: the logic holds
+     * with every subsignature count at zero, a macro subsignature, or not a
+     * plain logical signature. */
+    uint32_t *ac_lsig_always;
+    uint32_t ac_lsig_always_cnt;
 };
 
 struct cli_cdb {
@@ -359,6 +365,16 @@ cl_error_t cli_scan_fmap(cli_ctx *ctx, cli_file_t ftype, bool filetype_only, str
  * @return cl_error_t
  */
 cl_error_t cli_exp_eval(cli_ctx *ctx, struct cli_matcher *root, struct cli_ac_data *acdata, struct cli_target_info *target_info);
+
+/**
+ * @brief Read CL_LSIG_EVAL (sparse, full or verify) into the engine.
+ *
+ * Called once when the engine is compiled. An unset or empty variable selects
+ * sparse; any other unrecognised value is reported and selects sparse.
+ *
+ * @param engine The engine to set the logical signature evaluation mode on.
+ */
+void cli_lsig_eval_mode_init(struct cl_engine *engine);
 
 cl_error_t cli_caloff(const char *offstr, const struct cli_target_info *info, cli_target_t target, uint32_t *offdata, uint32_t *offset_min, uint32_t *offset_max);
 

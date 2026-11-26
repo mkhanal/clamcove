@@ -624,10 +624,53 @@ static int ac_maketrans(struct cli_matcher *root)
     return CL_SUCCESS;
 }
 
+static cl_error_t ac_build_lsig_always(struct cli_matcher *root)
+{
+    uint32_t i;
+    uint32_t count = 0;
+    uint32_t zero_counts[64] = {0};
+
+    free(root->ac_lsig_always);
+    root->ac_lsig_always     = NULL;
+    root->ac_lsig_always_cnt = 0;
+
+    if (!root->ac_lsigs)
+        return CL_SUCCESS;
+
+    root->ac_lsig_always = (uint32_t *)malloc(root->ac_lsigs * sizeof(uint32_t));
+    if (!root->ac_lsig_always) {
+        cli_errmsg("ac_build_lsig_always: Can't allocate memory for root->ac_lsig_always\n");
+        return CL_EMEM;
+    }
+
+    for (i = 0; i < root->ac_lsigs; i++) {
+        const struct cli_ac_lsig *lsig = root->ac_lsigtable[i];
+        unsigned int evalcnt           = 0;
+        uint64_t evalids               = 0;
+
+        if (lsig->type != CLI_LSIG_NORMAL ||
+            lsig->tdb.macro_ptids ||
+            cli_ac_chklsig(lsig->u.logic, lsig->u.logic + strlen(lsig->u.logic), zero_counts, &evalcnt, &evalids, 0) != 0) {
+            root->ac_lsig_always[count++] = i;
+        }
+    }
+    root->ac_lsig_always_cnt = count;
+
+    cli_dbgmsg("ac_build_lsig_always: %u of %u logical signatures are evaluated for every file\n", count, root->ac_lsigs);
+
+    return CL_SUCCESS;
+}
+
 cl_error_t cli_ac_buildtrie(struct cli_matcher *root)
 {
+    cl_error_t ret;
+
     if (!root)
         return CL_EMALFDB;
+
+    ret = ac_build_lsig_always(root);
+    if (CL_SUCCESS != ret)
+        return ret;
 
     if (!(root->ac_root)) {
         cli_dbgmsg("cli_ac_buildtrie: AC pattern matcher is not initialised\n");
@@ -719,6 +762,10 @@ void cli_ac_free(struct cli_matcher *root)
 {
     uint32_t i               = 0;
     struct cli_ac_patt *patt = NULL;
+
+    free(root->ac_lsig_always);
+    root->ac_lsig_always     = NULL;
+    root->ac_lsig_always_cnt = 0;
 
     for (i = 0; i < root->ac_patterns; i++) {
         patt = root->ac_pattable[i];
@@ -1462,8 +1509,26 @@ cl_error_t cli_ac_initdata(struct cli_ac_data *data, uint32_t partsigs, uint32_t
         }
         for (i = 1; i < lsigs; i++)
             data->lsigcnt[i] = data->lsigcnt[0] + 64 * i;
+        data->lsig_touched      = (uint8_t *)calloc(lsigs, sizeof(uint8_t));
+        data->lsig_touched_list = (uint32_t *)malloc(lsigs * sizeof(uint32_t));
+        if (!data->lsig_touched || !data->lsig_touched_list) {
+            free(data->lsig_touched);
+            free(data->lsig_touched_list);
+            free(data->lsigcnt[0]);
+            free(data->lsigcnt);
+            if (partsigs)
+                free(data->offmatrix);
+
+            if (reloffsigs)
+                free(data->offset);
+
+            cli_errmsg("cli_ac_init: Can't allocate memory for data->lsig_touched\n");
+            return CL_EMEM;
+        }
         data->yr_matches = (uint8_t *)calloc(lsigs, sizeof(uint8_t));
         if (data->yr_matches == NULL) {
+            free(data->lsig_touched);
+            free(data->lsig_touched_list);
             free(data->lsigcnt[0]);
             free(data->lsigcnt);
             if (partsigs)
@@ -1478,6 +1543,8 @@ cl_error_t cli_ac_initdata(struct cli_ac_data *data, uint32_t partsigs, uint32_t
         data->lsig_matches = (struct cli_lsig_matches **)calloc(lsigs, sizeof(struct cli_lsig_matches *));
         if (!data->lsig_matches) {
             free(data->yr_matches);
+            free(data->lsig_touched);
+            free(data->lsig_touched_list);
             free(data->lsigcnt[0]);
             free(data->lsigcnt);
             if (partsigs)
@@ -1496,6 +1563,8 @@ cl_error_t cli_ac_initdata(struct cli_ac_data *data, uint32_t partsigs, uint32_t
             free(data->lsigsuboff_last);
             free(data->lsigsuboff_first);
             free(data->yr_matches);
+            free(data->lsig_touched);
+            free(data->lsig_touched_list);
             free(data->lsigcnt[0]);
             free(data->lsigcnt);
             if (partsigs)
@@ -1516,6 +1585,8 @@ cl_error_t cli_ac_initdata(struct cli_ac_data *data, uint32_t partsigs, uint32_t
             free(data->lsigsuboff_last);
             free(data->lsigsuboff_first);
             free(data->yr_matches);
+            free(data->lsig_touched);
+            free(data->lsig_touched_list);
             free(data->lsigcnt[0]);
             free(data->lsigcnt);
             if (partsigs)
@@ -1611,6 +1682,10 @@ void cli_ac_freedata(struct cli_ac_data *data)
             data->lsig_matches = 0;
         }
         free(data->yr_matches);
+        free(data->lsig_touched);
+        free(data->lsig_touched_list);
+        data->lsig_touched      = NULL;
+        data->lsig_touched_list = NULL;
         free(data->lsigcnt[0]);
         free(data->lsigcnt);
         free(data->lsigsuboff_last[0]);
@@ -1672,9 +1747,18 @@ inline static cl_error_t ac_addtype(struct cli_matched_type **list, cli_file_t t
     return CL_SUCCESS;
 }
 
+void lsig_touch(struct cli_ac_data *mdata, uint32_t lsig_id)
+{
+    if (!mdata->lsig_touched[lsig_id]) {
+        mdata->lsig_touched[lsig_id]                        = 1;
+        mdata->lsig_touched_list[mdata->lsig_touched_cnt++] = lsig_id;
+    }
+}
+
 void lsig_increment_subsig_match(struct cli_ac_data *mdata, uint32_t lsig_id, uint32_t subsig_id)
 {
     mdata->lsigcnt[lsig_id][subsig_id]++;
+    lsig_touch(mdata, lsig_id);
 }
 
 cl_error_t lsig_sub_matched(const struct cli_matcher *root, struct cli_ac_data *mdata, uint32_t lsig_id, uint32_t subsig_id, uint32_t realoff, int partial)
@@ -1698,6 +1782,7 @@ cl_error_t lsig_sub_matched(const struct cli_matcher *root, struct cli_ac_data *
 
         /* Increment the subsig count for this logical signature */
         mdata->lsigcnt[lsig_id][subsig_id]++;
+        lsig_touch(mdata, lsig_id);
 
         if (mdata->lsigcnt[lsig_id][subsig_id] <= 1 || !tdb->macro_ptids || !tdb->macro_ptids[subsig_id]) {
             /* Store the offset of this subsig match in the last-list (except in certain circumstances) */
@@ -1793,6 +1878,7 @@ cl_error_t lsig_sub_matched(const struct cli_matcher *root, struct cli_ac_data *
                        last_macroprev_match, smin, smax, last_macro_match);
 
             mdata->lsigcnt[lsig_id][subsig_id + 1]++;
+            lsig_touch(mdata, lsig_id);
             mdata->lsigsuboff_last[lsig_id][subsig_id + 1] = last_macro_match;
         }
     }
