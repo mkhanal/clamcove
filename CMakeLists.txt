@@ -27,7 +27,7 @@ include(Version)
 
 set(PACKAGE_NAME      "${PROJECT_NAME}")
 set(PACKAGE_VERSION   "${PROJECT_VERSION}")
-set(CLAMCOVE_RELEASE  "5" CACHE STRING "ClamCove distribution release number appended to the ClamAV version")
+set(CLAMCOVE_RELEASE  "6" CACHE STRING "ClamCove distribution release number appended to the ClamAV version")
 set(CLAMCOVE_VERSION  "${PROJECT_VERSION}${VERSION_SUFFIX}.${CLAMCOVE_RELEASE}")
 set(PACKAGE_STRING    "${PROJECT_NAME} ${PROJECT_VERSION}${VERSION_SUFFIX}")
 set(PACKAGE_BUGREPORT "https://github.com/Cisco-Talos/clamav/issues")

@@ -14,5 +14,5 @@ The differences from upstream ClamAV 1.5.4, each with its upstream status, are
 listed in the table at the top of README.md.
 
 Version output carries the ClamAV version first and unchanged, followed by the
-distribution: "ClamAV 1.5.4 (ClamCove 1.5.4.5)". The distribution release
+distribution: "ClamAV 1.5.4 (ClamCove 1.5.4.6)". The distribution release
 number is the CMake variable CLAMCOVE_RELEASE.
