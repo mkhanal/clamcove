@@ -291,6 +291,14 @@ struct cli_pwdb {
     struct cli_pwdb *next;
 };
 
+/* How cli_exp_eval() picks the logical signatures it evaluates; set from the
+ * CL_LSIG_EVAL environment variable when the engine is compiled. */
+typedef enum cli_lsig_eval_mode {
+    CLI_LSIG_EVAL_SPARSE = 0, /* only logical signatures a subsignature matched, and those that can hold with no match */
+    CLI_LSIG_EVAL_FULL,       /* every logical signature */
+    CLI_LSIG_EVAL_VERIFY      /* sparse, after checking that every skipped signature has no match; evaluates in full if one has */
+} cli_lsig_eval_mode_t;
+
 struct cl_engine {
     uint32_t refcount; /* reference counter */
     uint32_t sdb;
@@ -445,6 +453,8 @@ struct cl_engine {
     uint64_t pcre_match_limit;
     uint64_t pcre_recmatch_limit;
     uint64_t pcre_max_filesize;
+
+    cli_lsig_eval_mode_t lsig_eval_mode;
 
 #ifdef HAVE_YARA
     /* YARA */
